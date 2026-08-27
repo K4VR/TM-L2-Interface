@@ -7,15 +7,12 @@ dump with offsets) into the parser. It decodes little-endian words, longs,
 IEEE-754 `REAL` values, the coil-number string, and the `D_STAT_MILL` /
 `D_STAT_MILL2` bitfields, then can export the table to CSV.
 
-## Run locally
+## Run (no install)
 
-```bash
-npm install
-npm test
-npm run dev
-```
+Open `hex-parser.html` in any web browser. Double-click the file, or use
+**File → Open**. Node, npm, and a web server are not required.
 
-Open the printed local URL and either paste a capture or click **Load Sample**.
+Paste a capture and click **Parse Hex Dump**, or click **Load Sample**.
 
 ## Message layout
 

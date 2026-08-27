@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TM L2 Wireshark Parser</title>
+  <style>
+    :root {
+      --bg: #f9fafb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #4b5563;
+      --border: #9ca3af;
+      --line: #d1d5db;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .page { min-height: 100vh; padding: 16px; }
+    .card {
+      max-width: 80rem;
+      margin: 0 auto;
+      background: var(--card);
+      border-radius: 8px;
+      box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+      padding: 24px;
+    }
+    h1 { margin: 0 0 4px; font-size: 1.5rem; }
+    .lede { margin: 0 0 16px; font-size: 0.875rem; color: var(--muted); }
+    label { display: block; font-size: 0.875rem; font-weight: 600; margin-bottom: 8px; }
+    textarea {
+      width: 100%;
+      height: 8rem;
+      padding: 8px 12px;
+      border: 2px solid #d1d5db;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 0.875rem;
+      resize: vertical;
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0 16px; }
+    button {
+      padding: 8px 24px;
+      border: 0;
+      border-radius: 4px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    button:disabled { background: #9ca3af; cursor: not-allowed; color: #fff; }
+    .btn-parse { background: #2563eb; color: #fff; }
+    .btn-parse:hover:not(:disabled) { background: #1d4ed8; }
+    .btn-csv { background: #16a34a; color: #fff; }
+    .btn-csv:hover:not(:disabled) { background: #15803d; }
+    .btn-sample { background: #1f2937; color: #fff; }
+    .btn-sample:hover { background: #111827; }
+    .btn-clear {
+      background: #fff;
+      color: #374151;
+      border: 1px solid #d1d5db;
+    }
+    .btn-clear:hover { background: #f3f4f6; }
+    .error {
+      margin-bottom: 16px;
+      border: 1px solid #fca5a5;
+      background: #fef2f2;
+      color: #991b1b;
+      border-radius: 4px;
+      padding: 8px 12px;
+      font-size: 0.875rem;
+    }
+    .summary { margin: 0 0 12px; font-size: 0.875rem; font-weight: 600; }
+    .empty { text-align: center; padding: 32px 0; color: #6b7280; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border: 1px solid var(--border); padding: 4px 8px; }
+    th { background: #e5e7eb; text-align: left; padding: 8px; }
+    .center { text-align: center; }
+    .indent { padding-left: 24px; }
+    .value { background: #e5e7eb; font-family: ui-monospace, Consolas, monospace; }
+    .hex { color: #2563eb; }
+    .true { color: #15803d; font-weight: 600; }
+    .false { color: #6b7280; font-weight: 600; }
+    .offset-hl { background: #fef9c3; text-align: center; }
+    .coil { background: #f0fdf4; }
+    .coil-value {
+      background: #bbf7d0;
+      font-family: ui-monospace, Consolas, monospace;
+      font-weight: 700;
+      color: #14532d;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="card">
+      <h1>Wireshark Message Parser</h1>
+      <p class="lede">
+        Paste a TM Level 2 cyclic mill telegram copied from Wireshark. Little-endian words,
+        longs, IEEE-754 REALs, and the D_STAT_MILL bitfields are decoded in place.
+        This page is a single HTML file — open it in a browser; no install is required.
+      </p>
+      <form id="parse-form">
+        <label for="hex-dump">Paste Hex Dump:</label>
+        <textarea
+          id="hex-dump"
+          placeholder="Example: 10 02 0A 00 C8 5C 00 00 0C 31 05 00..."
+        ></textarea>
+        <div class="actions">
+          <button type="submit" class="btn-parse">Parse Hex Dump</button>
+          <button type="button" id="export-btn" class="btn-csv" disabled>Export to CSV</button>
+          <button type="button" id="sample-btn" class="btn-sample">Load Sample</button>
+          <button type="button" id="clear-btn" class="btn-clear">Clear</button>
+        </div>
+      </form>
+      <div id="error" class="error" hidden></div>
+      <p id="summary" class="summary" hidden></p>
+      <div id="table-host"></div>
+      <div id="empty" class="empty">
+        Paste hex data above and click "Parse Hex Dump" to see the parsed message structure
+      </div>
+    </div>
+  </div>
+  <script>
+    const MIN_BYTES = 20;
+    const HEX_PAIR = /[0-9A-Fa-f]{2}/g;
+    const DUMP_LINE =
+      /^\s*([0-9A-Fa-f]{3,8})\s{1,3}((?:[0-9A-Fa-f]{2}[\s-]*)+)(?:\s{2,}.*)?$/;
+
+    const D_STAT_MILL_BITS = [
+      { name: "UseSimulatorInputs", description: "UseSimulatorInputs" },
+      { name: "", description: "thread in progress" },
+      { name: "PassInProgress", description: "PassInProgress" },
+      { name: "MillRolling", description: "MillRolling" },
+      { name: "MillAccelerating", description: "MillAccelerating" },
+      { name: "MillDecelerating", description: "MillDecelerating" },
+      { name: "MillStopped", description: "MillStopped" },
+      { name: "MillVented", description: "MillVented" },
+      { name: "", description: "Coil on Pay Off Reel" },
+      { name: "", description: "" },
+      { name: "EndOfCoil", description: "EndOfCoil" },
+      { name: "", description: "" },
+      { name: "EntryTensionEstablished", description: "EntryTensionEstablished" },
+      { name: "", description: "" },
+      { name: "", description: "" },
+      { name: "RollChangeFlag", description: "Set on Roll Change" },
+    ];
+
+    const D_STAT_MILL2_BITS = [
+      { name: "DrivesInEStop", description: "DrivesInHold" },
+      { name: "", description: "" },
+      { name: "", description: "" },
+      { name: "DrivesInNStop", description: "DrivesInNStop" },
+      { name: "DrivesInRun", description: "DrivesInRun" },
+      { name: "DrivesInThread", description: "DrivesInThread" },
+      { name: "StripInStand", description: "StripInStand" },
+      { name: "", description: "" },
+      { name: "", description: "" },
+      { name: "", description: "" },
+      { name: "", description: "" },
+      { name: "", description: "" },
+      { name: "", description: "" },
+      { name: "", description: "" },
+      { name: "", description: "request setup" },
+      { name: "", description: "" },
+    ];
+
+    const LAYOUT = [
+      { kind: "word", name: "Length", description: "" },
+      { kind: "word", name: "Msg Number", description: "" },
+      { kind: "long", name: "Sequence Number", description: "" },
+      { kind: "bitfield", name: "D_STAT_MILL", description: "Word(bit#)", bits: D_STAT_MILL_BITS },
+      { kind: "bitfield", name: "D_STAT_MILL2", description: "Word(bit#)", bits: D_STAT_MILL2_BITS },
+      { kind: "real", name: "EntryWidth", description: "from EMS" },
+      { kind: "spacer" },
+      { kind: "real", name: "EntryCoilDiameter", description: "" },
+      { kind: "real", name: "EntryPyroTemp", description: "" },
+      { kind: "real", name: "Spare", description: "" },
+      { kind: "real", name: "DSEstimatedRollGap", description: "actual gaps" },
+      { kind: "real", name: "NDSEstimatedRollGap", description: "actual gaps" },
+      { kind: "real", name: "BendForceMV", description: "actual" },
+      { kind: "real", name: "BendTotalForceRef", description: "actual" },
+      { kind: "real", name: "DSCylinderPressureMV", description: "actual" },
+      { kind: "real", name: "NDSCylinderPressureMV", description: "actual" },
+      { kind: "real", name: "DSStripForceMV", description: "actual" },
+      { kind: "real", name: "NDSStripForceMV", description: "actual" },
+      { kind: "real", name: "EntryTenRunRef", description: "target" },
+      { kind: "real", name: "EntryTensionInput", description: "actual" },
+      { kind: "real", name: "EntryLaserSpeed", description: "" },
+      { kind: "real", name: "ExitLaserSpeed", description: "" },
+      { kind: "real", name: "ElongationReference", description: "" },
+      { kind: "real", name: "ElongationError", description: "" },
+      { kind: "real", name: "MillSpeed", description: "actual speed" },
+      { kind: "real", name: "MainDriveAmps", description: "total amps" },
+      { kind: "real", name: "EstimatedForwardSlip", description: "fixed number in vantage (1.02)" },
+      { kind: "char", name: "CoilNumber", description: "echo back", length: 20 },
+      { kind: "real", name: "Torque", description: "feedback for model" },
+      { kind: "real", name: "length", description: "feedback for model" },
+      { kind: "real", name: "Actual Exit Gauge", description: "future" },
+      { kind: "spacer" },
+      { kind: "real", name: "Spare1", description: "" },
+      { kind: "real", name: "Spare2", description: "" },
+      { kind: "real", name: "Spare3", description: "" },
+      { kind: "real", name: "Spare4", description: "" },
+      { kind: "real", name: "Spare5", description: "" },
+      { kind: "padding", name: "Spares(20)", description: "", length: 80 },
+    ];
+
+    const SAMPLE_HEX = [
+      "0000  E4 00 0A 00 C8 5C 00 00 0C 31 05 00 00 50 9C 44",
+      "0010  00 48 E7 44 9A 99 90 42 00 00 00 00 9A 99 09 40",
+      "0020  1F 85 0B 40 00 00 E1 43 00 00 F0 43 00 40 03 45",
+      "0030  00 50 02 45 00 50 43 46 00 00 43 46 00 00 0C 42",
+      "0040  33 33 0B 42 00 20 48 44 00 20 4C 44 5C 8F 82 3F",
+      "0050  6F 12 83 3A 00 00 48 44 00 40 9C 44 5C 8F 82 3F",
+      "0060  54 4D 2D 43 4F 49 4C 2D 30 30 31 00 00 00 00 00",
+      "0070  00 00 00 00 00 80 39 43 00 58 9C 44 6F 12 03 3D",
+      "0080  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+      "0090  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+      "00A0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+      "00B0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+      "00C0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+      "00D0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+      "00E0  00 00 00 00",
+    ].join("\n");
+
+    function bytesFromHexPairs(hex) {
+      const pairs = hex.match(HEX_PAIR) || [];
+      return pairs.map((pair) => parseInt(pair, 16));
+    }
+
+    function bytesFromWiresharkDump(hex) {
+      const lines = hex.split(/\r?\n/);
+      const bytes = [];
+      let matchedLines = 0;
+      let nonEmptyLines = 0;
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        nonEmptyLines += 1;
+        const match = trimmed.match(DUMP_LINE);
+        if (!match) continue;
+        matchedLines += 1;
+        bytes.push.apply(bytes, bytesFromHexPairs(match[2] || ""));
+      }
+      if (matchedLines === 0 || matchedLines < nonEmptyLines / 2) return null;
+      return Uint8Array.from(bytes);
+    }
+
+    function hexToBytes(hex) {
+      const dumpBytes = bytesFromWiresharkDump(hex);
+      if (dumpBytes) return dumpBytes;
+      const cleaned = hex.replace(/0x/gi, "").replace(/[^0-9A-Fa-f]/g, "");
+      return Uint8Array.from(bytesFromHexPairs(cleaned));
+    }
+
+    function readU16LE(bytes, start) {
+      if (start + 2 > bytes.length) return 0;
+      return bytes[start] | (bytes[start + 1] << 8);
+    }
+
+    function readU32LE(bytes, start) {
+      if (start + 4 > bytes.length) return 0;
+      return (
+        (bytes[start] |
+          (bytes[start + 1] << 8) |
+          (bytes[start + 2] << 16) |
+          (bytes[start + 3] << 24)) >>>
+        0
+      );
+    }
+
+    function readF32LE(bytes, start) {
+      if (start + 4 > bytes.length) return 0;
+      const view = new DataView(bytes.buffer, bytes.byteOffset + start, 4);
+      return view.getFloat32(0, true);
+    }
+
+    function readString(bytes, start, length) {
+      let text = "";
+      const end = Math.min(start + length, bytes.length);
+      for (let i = start; i < end; i += 1) {
+        const byte = bytes[i];
+        if (byte === 0) break;
+        text += String.fromCharCode(byte);
+      }
+      return text;
+    }
+
+    function formatHexWord(value) {
+      return "0x" + value.toString(16).toUpperCase().padStart(4, "0");
+    }
+
+    function formatReal(value) {
+      return Number.isFinite(value) ? value.toFixed(6) : String(value);
+    }
+
+    function parseHexDump(hexInput) {
+      const bytes = hexToBytes(hexInput);
+      if (bytes.length < MIN_BYTES) {
+        return {
+          ok: false,
+          error:
+            "Hex dump too short. Expected at least " +
+            MIN_BYTES +
+            " bytes. Got " +
+            bytes.length +
+            " bytes.",
+        };
+      }
+
+      const rows = [];
+      let offset = 0;
+      let messageLength = 0;
+      let msgNumber = 0;
+
+      for (const field of LAYOUT) {
+        if (field.kind === "spacer") {
+          rows.push({ type: "empty" });
+          continue;
+        }
+
+        if (field.kind === "word") {
+          const value = readU16LE(bytes, offset);
+          if (field.name === "Length") messageLength = value;
+          if (field.name === "Msg Number") msgNumber = value;
+          rows.push({
+            type: "row",
+            fieldName: field.name,
+            description: field.description,
+            dataType: "Word",
+            byteSize: "2",
+            offset: String(offset),
+            value: String(value),
+          });
+          offset += 2;
+          continue;
+        }
+
+        if (field.kind === "long") {
+          const value = readU32LE(bytes, offset);
+          rows.push({
+            type: "row",
+            fieldName: field.name,
+            description: field.description,
+            dataType: "Long",
+            byteSize: "4",
+            offset: String(offset),
+            value: String(value),
+          });
+          offset += 4;
+          continue;
+        }
+
+        if (field.kind === "bitfield") {
+          const value = readU16LE(bytes, offset);
+          rows.push({
+            type: "bitfield",
+            fieldName: field.name,
+            description: field.description,
+            dataType: "Word(bit#)",
+            byteSize: "2",
+            offset: String(offset),
+            value: formatHexWord(value),
+          });
+          field.bits.forEach(function (bit, bitIndex) {
+            const isTrue = (value & (1 << bitIndex)) !== 0;
+            rows.push({
+              type: "bit",
+              fieldName: bit.name,
+              description: bit.description,
+              dataType: String(bitIndex),
+              byteSize: "",
+              offset: "",
+              value: isTrue ? "TRUE" : "FALSE",
+              isTrue: isTrue,
+            });
+          });
+          offset += 2;
+          continue;
+        }
+
+        if (field.kind === "real") {
+          const value = readF32LE(bytes, offset);
+          rows.push({
+            type: "row",
+            fieldName: field.name,
+            description: field.description,
+            dataType: "REAL",
+            byteSize: "4",
+            offset: String(offset),
+            value: formatReal(value),
+          });
+          offset += 4;
+          continue;
+        }
+
+        if (field.kind === "char") {
+          rows.push({
+            type: "coil",
+            fieldName: field.name,
+            description: field.description,
+            dataType: "char",
+            byteSize: String(field.length),
+            offset: String(offset),
+            value: readString(bytes, offset, field.length),
+          });
+          offset += field.length;
+          continue;
+        }
+
+        rows.push({
+          type: "row",
+          fieldName: field.name,
+          description: field.description,
+          dataType: "REAL",
+          byteSize: String(field.length),
+          offset: String(offset),
+          value: "(remaining bytes are padding)",
+        });
+        offset += field.length;
+      }
+
+      return {
+        ok: true,
+        rows: rows,
+        byteCount: bytes.length,
+        messageLength: messageLength,
+        msgNumber: msgNumber,
+      };
+    }
+
+    function csvCell(value) {
+      return '"' + String(value).replace(/"/g, '""') + '"';
+    }
+
+    function rowsToCsv(rows) {
+      const lines = ["Field Name,Description,Data Type,Byte Size,Offset,Value"];
+      for (const row of rows) {
+        if (row.type === "empty") continue;
+        lines.push(
+          [
+            row.fieldName,
+            row.description,
+            row.dataType,
+            row.byteSize,
+            row.offset,
+            row.value,
+          ]
+            .map(csvCell)
+            .join(",")
+        );
+      }
+      return lines.join("\n") + "\n";
+    }
+
+    function csvFilename() {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5);
+      return "wireshark_parsed_" + timestamp + ".csv";
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function cell(text, className) {
+      return (
+        "<td class=\"" +
+        (className || "") +
+        "\">" +
+        (text === "" ? "" : escapeHtml(text)) +
+        "</td>"
+      );
+    }
+
+    function renderRows(rows) {
+      return rows
+        .map(function (row) {
+          if (row.type === "empty") {
+            return "<tr><td colspan=\"6\">&nbsp;</td></tr>";
+          }
+          if (row.type === "bitfield") {
+            return (
+              "<tr>" +
+              cell(row.fieldName) +
+              cell(row.description) +
+              cell(row.dataType, "center") +
+              cell(row.byteSize, "center") +
+              cell(row.offset, "offset-hl") +
+              cell(row.value, "value hex") +
+              "</tr>"
+            );
+          }
+          if (row.type === "bit") {
+            return (
+              "<tr>" +
+              cell(row.fieldName, "indent") +
+              cell(row.description) +
+              cell(row.dataType, "center") +
+              cell(row.byteSize, "center") +
+              cell(row.offset, "center") +
+              cell(row.value, "value " + (row.isTrue ? "true" : "false")) +
+              "</tr>"
+            );
+          }
+          if (row.type === "coil") {
+            return (
+              "<tr>" +
+              cell(row.fieldName, "coil") +
+              cell(row.description, "coil") +
+              cell(row.dataType, "coil center") +
+              cell(row.byteSize, "coil center") +
+              cell(row.offset, "coil center") +
+              cell(row.value, "coil-value") +
+              "</tr>"
+            );
+          }
+          return (
+            "<tr>" +
+            cell(row.fieldName) +
+            cell(row.description) +
+            cell(row.dataType, "center") +
+            cell(row.byteSize, "center") +
+            cell(row.offset, "center") +
+            cell(row.value, "value") +
+            "</tr>"
+          );
+        })
+        .join("");
+    }
+
+    const hexInput = document.getElementById("hex-dump");
+    const errorEl = document.getElementById("error");
+    const summaryEl = document.getElementById("summary");
+    const tableHost = document.getElementById("table-host");
+    const emptyEl = document.getElementById("empty");
+    const exportBtn = document.getElementById("export-btn");
+    let parsed = null;
+
+    function showResult(result) {
+      parsed = result && result.ok ? result : null;
+      exportBtn.disabled = !parsed;
+      if (!result) {
+        errorEl.hidden = true;
+        summaryEl.hidden = true;
+        tableHost.innerHTML = "";
+        emptyEl.hidden = false;
+        return;
+      }
+      if (!result.ok) {
+        errorEl.hidden = false;
+        errorEl.textContent = result.error;
+        summaryEl.hidden = true;
+        tableHost.innerHTML = "";
+        emptyEl.hidden = true;
+        return;
+      }
+      errorEl.hidden = true;
+      emptyEl.hidden = true;
+      summaryEl.hidden = false;
+      summaryEl.textContent =
+        "Parsed " +
+        result.byteCount +
+        " bytes · Length=" +
+        result.messageLength +
+        " · Msg Number=" +
+        result.msgNumber;
+      tableHost.innerHTML =
+        '<div class="table-wrap"><table><thead><tr>' +
+        "<th>Field Name</th><th>Description</th><th>Data Type</th>" +
+        "<th>Byte Size</th><th>Offset</th><th>Value</th>" +
+        "</tr></thead><tbody>" +
+        renderRows(result.rows) +
+        "</tbody></table></div>";
+    }
+
+    document.getElementById("parse-form").addEventListener("submit", function (event) {
+      event.preventDefault();
+      showResult(parseHexDump(hexInput.value));
+    });
+
+    document.getElementById("sample-btn").addEventListener("click", function () {
+      hexInput.value = SAMPLE_HEX;
+      showResult(parseHexDump(SAMPLE_HEX));
+    });
+
+    document.getElementById("clear-btn").addEventListener("click", function () {
+      hexInput.value = "";
+      showResult(null);
+    });
+
+    exportBtn.addEventListener("click", function () {
+      if (!parsed) return;
+      const blob = new Blob([rowsToCsv(parsed.rows)], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = csvFilename();
+      link.style.visibility = "hidden";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>
