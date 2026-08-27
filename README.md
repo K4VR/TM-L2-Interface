@@ -12,7 +12,9 @@ IEEE-754 `REAL` values, the coil-number string, and the `D_STAT_MILL` /
 Open `hex-parser.html` in any web browser. Double-click the file, or use
 **File → Open**. Node, npm, and a web server are not required.
 
-Paste a capture and click **Parse Hex Dump**, or click **Load Sample**.
+Paste a capture and click **Parse Hex Dump**, or click **Load Sample**. If you
+copy a full Ethernet frame from Wireshark, the leading 54-byte
+Ethernet/IP/TCP header is skipped automatically — you do not need to trim it.
 
 ## Message layout
 
@@ -55,3 +57,6 @@ are little-endian.
 | 148 | Spares(20) | padding | 80 |
 
 Total encoded size is 228 bytes.
+
+The TypeScript sources under `src/` are optional. They are only needed if you
+want to change the parser and re-run unit tests, which requires Node.js.

@@ -32,6 +32,7 @@ export type ParseSuccess = {
   ok: true
   rows: ParsedRow[]
   byteCount: number
+  skippedBytes: number
   messageLength: number
   msgNumber: number
 }

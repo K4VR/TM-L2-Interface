@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { formatReal } from './binary.ts'
 import { encodeCyclicMessage, parseHexDump } from './cyclicMessage.ts'
 import { rowsToCsv } from './csv.ts'
+import { buildEthernetIpv4TcpHeader } from './frame.ts'
 import { bytesToHex } from './hex.ts'
 import { cyclicMessageByteLength } from './layout.ts'
 import { SAMPLE_VALUES } from './sample.ts'
@@ -50,6 +51,7 @@ describe('cyclic mill message parser', () => {
 
     expect(result.messageLength).toBe(228)
     expect(result.msgNumber).toBe(10)
+    expect(result.skippedBytes).toBe(0)
     expect(valueOf(result.rows, 'Length')).toBe('228')
     expect(valueOf(result.rows, 'Msg Number')).toBe('10')
     expect(valueOf(result.rows, 'Sequence Number')).toBe(String(0x5cc8))
@@ -91,6 +93,28 @@ describe('cyclic mill message parser', () => {
     expect(lengthRow && lengthRow.type !== 'empty' ? lengthRow.value : undefined).toBe('528')
     expect(msgRow && msgRow.type !== 'empty' ? msgRow.offset : undefined).toBe('2')
     expect(msgRow && msgRow.type !== 'empty' ? msgRow.value : undefined).toBe('10')
+  })
+
+  it('strips a 54-byte Ethernet/IP/TCP prefix from a full packet copy', () => {
+    const payload = encodeCyclicMessage({
+      ...SAMPLE_VALUES,
+      reals: { ...SAMPLE_VALUES.reals },
+    })
+    const frame = new Uint8Array(54 + payload.length)
+    frame.set(buildEthernetIpv4TcpHeader(payload.length), 0)
+    frame.set(payload, 54)
+
+    const result = parseHexDump(bytesToHex(frame))
+    expect(result.ok).toBe(true)
+    if (!result.ok) {
+      return
+    }
+    expect(result.skippedBytes).toBe(54)
+    expect(result.messageLength).toBe(228)
+    expect(result.msgNumber).toBe(10)
+    expect(valueOf(result.rows, 'CoilNumber')).toBe('TM-COIL-001')
+    expect(valueOf(result.rows, 'Length')).toBe('228')
+    expect(valueOf(result.rows, 'D_STAT_MILL')).toBe('0x310C')
   })
 
   it('exports CSV with a header and without spacer rows', () => {

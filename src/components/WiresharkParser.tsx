@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { csvFilename, rowsToCsv } from '../parser/csv.ts'
+import { skippedHeaderLabel } from '../parser/frame.ts'
 import { parseHexDump } from '../parser/cyclicMessage.ts'
 import { sampleHexDump } from '../parser/sample.ts'
 import type { ParsedRow, ParseResult } from '../parser/types.ts'
@@ -132,7 +133,9 @@ export default function WiresharkParser() {
     if (!parsed) {
       return null
     }
-    return `Parsed ${parsed.byteCount} bytes · Length=${parsed.messageLength} · Msg Number=${parsed.msgNumber}`
+    const skipped = skippedHeaderLabel(parsed.skippedBytes)
+    const extra = skipped ? ` · ${skipped}` : ''
+    return `Parsed ${parsed.byteCount} bytes${extra} · Length=${parsed.messageLength} · Msg Number=${parsed.msgNumber}`
   }, [parsed])
 
   const handleParse = (event?: FormEvent) => {
@@ -157,7 +160,8 @@ export default function WiresharkParser() {
         <h1 className="text-2xl font-bold mb-1 text-gray-800">Wireshark Message Parser</h1>
         <p className="text-sm text-gray-600 mb-4">
           Paste a TM Level 2 cyclic mill telegram copied from Wireshark. Little-endian words,
-          longs, IEEE-754 REALs, and the D_STAT_MILL bitfields are decoded in place.
+          longs, IEEE-754 REALs, and the D_STAT_MILL bitfields are decoded in place. A leading
+          Ethernet/IP/TCP header (usually 54 bytes) is skipped automatically.
         </p>
 
         <form className="mb-6 space-y-3" onSubmit={handleParse}>

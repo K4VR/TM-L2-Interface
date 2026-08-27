@@ -1,4 +1,5 @@
 import { bitValue, ByteCursor, ByteWriter, formatHexWord, formatReal } from './binary.ts'
+import { stripLinkHeaders } from './frame.ts'
 import { hexToBytes } from './hex.ts'
 import { CYCLIC_MESSAGE_LAYOUT, cyclicMessageByteLength } from './layout.ts'
 import type { ParseResult, ParsedRow } from './types.ts'
@@ -16,7 +17,8 @@ export type CyclicFieldValues = {
 }
 
 export function parseHexDump(hexInput: string): ParseResult {
-  const bytes = hexToBytes(hexInput)
+  const captured = hexToBytes(hexInput)
+  const { payload: bytes, skipped } = stripLinkHeaders(captured)
   if (bytes.length < MIN_BYTES) {
     return {
       ok: false,
@@ -142,6 +144,7 @@ export function parseHexDump(hexInput: string): ParseResult {
     ok: true,
     rows,
     byteCount: bytes.length,
+    skippedBytes: skipped,
     messageLength,
     msgNumber,
   }

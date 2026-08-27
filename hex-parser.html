@@ -102,6 +102,7 @@
       <p class="lede">
         Paste a TM Level 2 cyclic mill telegram copied from Wireshark. Little-endian words,
         longs, IEEE-754 REALs, and the D_STAT_MILL bitfields are decoded in place.
+        A leading Ethernet/IP/TCP header (usually 54 bytes) is skipped automatically.
         This page is a single HTML file — open it in a browser; no install is required.
       </p>
       <form id="parse-form">
@@ -258,6 +259,49 @@
       return Uint8Array.from(bytesFromHexPairs(cleaned));
     }
 
+    function readU16BE(bytes, offset) {
+      return ((bytes[offset] || 0) << 8) | (bytes[offset + 1] || 0);
+    }
+
+    function framePayloadOffset(bytes) {
+      if (bytes.length < 54) return 0;
+      var ethernetHeader = 14;
+      var etherType = readU16BE(bytes, 12);
+      if (etherType === 0x8100) {
+        if (bytes.length < 58) return 0;
+        ethernetHeader = 18;
+        etherType = readU16BE(bytes, 16);
+      }
+      if (etherType !== 0x0800) return 0;
+      var ipStart = ethernetHeader;
+      var versionIhl = bytes[ipStart] || 0;
+      if (versionIhl >> 4 !== 4) return 0;
+      var ihl = (versionIhl & 0x0f) * 4;
+      if (ihl < 20 || bytes.length < ipStart + ihl + 8) return 0;
+      var protocol = bytes[ipStart + 9] || 0;
+      if (protocol === 6) {
+        var tcpStart = ipStart + ihl;
+        if (bytes.length < tcpStart + 20) return 0;
+        var tcpLen = (((bytes[tcpStart + 12] || 0) >> 4) & 0x0f) * 4;
+        if (tcpLen < 20) return 0;
+        var tcpPayload = tcpStart + tcpLen;
+        if (bytes.length < tcpPayload + MIN_BYTES) return 0;
+        return tcpPayload;
+      }
+      if (protocol === 17) {
+        var udpPayload = ipStart + ihl + 8;
+        if (bytes.length < udpPayload + MIN_BYTES) return 0;
+        return udpPayload;
+      }
+      return 0;
+    }
+
+    function stripLinkHeaders(bytes) {
+      var skipped = framePayloadOffset(bytes);
+      if (skipped <= 0) return { payload: bytes, skipped: 0 };
+      return { payload: bytes.subarray(skipped), skipped: skipped };
+    }
+
     function readU16LE(bytes, start) {
       if (start + 2 > bytes.length) return 0;
       return bytes[start] | (bytes[start + 1] << 8);
@@ -300,7 +344,9 @@
     }
 
     function parseHexDump(hexInput) {
-      const bytes = hexToBytes(hexInput);
+      const captured = hexToBytes(hexInput);
+      const stripped = stripLinkHeaders(captured);
+      const bytes = stripped.payload;
       if (bytes.length < MIN_BYTES) {
         return {
           ok: false,
@@ -429,6 +475,7 @@
         ok: true,
         rows: rows,
         byteCount: bytes.length,
+        skippedBytes: stripped.skipped,
         messageLength: messageLength,
         msgNumber: msgNumber,
       };
@@ -566,13 +613,29 @@
       errorEl.hidden = true;
       emptyEl.hidden = true;
       summaryEl.hidden = false;
-      summaryEl.textContent =
+      var summary =
         "Parsed " +
         result.byteCount +
         " bytes · Length=" +
         result.messageLength +
         " · Msg Number=" +
         result.msgNumber;
+      if (result.skippedBytes) {
+        var skippedNote =
+          result.skippedBytes === 54
+            ? "skipped " + result.skippedBytes + "-byte Ethernet/IP/TCP header"
+            : "skipped " + result.skippedBytes + "-byte frame header";
+        summary =
+          "Parsed " +
+          result.byteCount +
+          " bytes · " +
+          skippedNote +
+          " · Length=" +
+          result.messageLength +
+          " · Msg Number=" +
+          result.msgNumber;
+      }
+      summaryEl.textContent = summary;
       tableHost.innerHTML =
         '<div class="table-wrap"><table><thead><tr>' +
         "<th>Field Name</th><th>Description</th><th>Data Type</th>" +
